@@ -1,7 +1,10 @@
 #! /usr/bin/env python3
 
-import collectd
+if __name__ != '__main__':
+    import collectd
+
 import os
+import sys
 import requests
 import time
 import socket
@@ -13,25 +16,48 @@ from timeit import default_timer as timer
 from urlparse import urljoin
 
 PLUGIN_NAME = '4gmodem'
-STATS_PATH = '/api/monitoring/traffic-statistics'
+
+ENDPOINTS = {
+    'traffic': '/api/monitoring/traffic-statistics',
+    'monthly': '/api/monitoring/month_statistics',
+    'signal': '/api/device/signal',
+}
+
+def cleanup_db(measure):
+    measure = measure.replace('dBm','')
+    measure = measure.replace('dB','')
+    measure = measure.replace('>=','')
+    return float(measure)
+
 # A dictionary mapping collectd identifiers to XML tags
 VALUE_MAPPING = {
-    'total_current': '_current_total',
-    'rx_current': 'CurrentDownload',
-    'tx_current': 'CurrentUpload',
-    'uptime_connection': 'CurrentConnectTime',
-    'total_total': '_total_total',
-    'rx_total': 'TotalDownload',
-    'tx_total': 'TotalUpload',
+    # Traffic readings from main stats
+    'uptime_connection': {'field': 'CurrentConnectTime', 'type': 'gauge'},
+    'total_bytes': {'field': '_total_total', 'type': 'derive'},
+    'rx_bytes': {'field': 'TotalDownload', 'type': 'derive'},
+    'tx_bytes': {'field': 'TotalUpload', 'type': 'derive'},
+    # Traffic from monthly stats
+    'month_rx': {'field': 'CurrentMonthDownload', 'type': 'gauge'},
+    'month_tx': {'field': 'CurrentMonthUpload', 'type': 'gauge'},
+    # Signal related measures
+    'snr': {'field': 'sinr', 'type': 'gauge', 'transform': cleanup_db},
+    'rssi': {'field': 'rssi', 'type': 'gauge', 'transform': cleanup_db},
+    'rsrp': {'field': 'rsrp', 'type': 'gauge', 'transform': cleanup_db},
+    'band': {'field': 'band', 'type': 'gauge'},
+    'ul_freq': {'field': 'lteulfreq', 'type': 'gauge'},
 }
+
 DEBUG=False
 
 def log(msg):
-    collectd.info('{}: {}'.format(PLUGIN_NAME, msg))
+    if 'collectd' in sys.modules:
+        collectd.info('{}: {}'.format(PLUGIN_NAME, msg))
+    else:
+        print(msg)
 
 def debug(msg):
     if DEBUG:
-        collectd.info('{}: {}'.format(PLUGIN_NAME, msg))
+        log('{}: {}'.format(PLUGIN_NAME, msg))
 
 log('loading python plugin: '+PLUGIN_NAME)
 _conf = []
@@ -51,33 +77,49 @@ def read(data=None):
         stats = get_stats(root)
 
         for k,v in VALUE_MAPPING.items():
-            val = collectd.Values(type='derive', type_instance='/'.join([modem_name, k]))
-            val.plugin = PLUGIN_NAME
-            val.values = [stats.get(v)]
-            debug('Dispatching value for {0}, value: {1}'.format(k, stats.get(v)))
-            val.dispatch()
+            value_data = stats.get( v.get('field') )
+            if 'transform' in v:
+                value_data = v['transform'](value_data)
 
-collectd.register_config(configure)
-collectd.register_read(read)
+            if (value_data):
+                val = collectd.Values(
+                    type=v.get('type'),
+                    type_instance=k,
+                    plugin_instance=modem_name,
+                    plugin=PLUGIN_NAME,
+                    values= [ value_data ]
+                )
+                debug('Dispatching value for {0.type_instance}, value: {0.values}'.format(val))
+                val.dispatch()
 
 def get_stats(root):
+
+    # Get a session authorization by visiting the homepage of the router
     session = requests.Session()
     indexr = session.get(root)
     if not indexr.ok:
         log("Index request failed with status {r.status_code}\n  Body:{r.text}".format(r=indexr))
 
-    statsr = session.get(urljoin(root, STATS_PATH))
-    if not statsr.ok:
-        log("Index request failed with status {r.status_code}\n  Body:{r.text}".format(r=statsr))
-
-    stats_t = etree.fromstring(statsr.content)
+    # Go fetch each of the URLs in the hash
+    # and merge the resulting dict with the
+    # overall stats
     stats = dict()
 
-    for el in list(stats_t):
-        stats[el.tag] = el.text
+    for stats_type, endpoint in ENDPOINTS.items():
+        response = session.get(urljoin(root, endpoint))
+        if not response.ok:
+            log("Index request failed with status {r.status_code}\n  Body:{r.text}".format(r=response))
 
-    if stats.get('code'):
-        log("XML response contained error\n  Error Code:{r[code]}\n  Message:{r[message]}".format(r=stats))
+        xml_t = etree.fromstring(response.content)
+
+        result = {}
+        for el in list(xml_t):
+            result[el.tag] = el.text
+
+        if stats.get('code'):
+            log("XML response contained error\n  Error Code:{r[code]}\n  Message:{r[message]}".format(r=stats))
+        else:
+            stats.update(result)
 
     generate_calculated_stats(stats)
     return stats
@@ -86,4 +128,28 @@ def generate_calculated_stats(stats):
     stats['_current_total'] = int(stats['CurrentDownload']) + int(stats['CurrentUpload'])
     stats['_total_total'] = int(stats['TotalDownload']) + int(stats['TotalUpload'])
 
+if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        print("Must supply a URL")
+        sys.exit(1)
+    root_url = sys.argv.pop(1)
+    stats = get_stats(root_url)
+    print('Dumping stats...')
+    pprint.pprint(stats)
+    for k,v in VALUE_MAPPING.items():
+        value_data = stats.get( v.get('field') )
+        if 'transform' in v:
+            value_data = v['transform'](value_data)
+        val = dict(
+            type=v.get('type'),
+            type_instance=k,
+            plugin_instance='modem_name supplied',
+            plugin=PLUGIN_NAME,
+            values= [ value_data ]
+        )
+        print('Prepared value:')
+        pprint.pprint(val)
+else:
+    collectd.register_config(configure)
+    collectd.register_read(read)
 

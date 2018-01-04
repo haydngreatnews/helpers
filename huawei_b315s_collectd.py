@@ -5,15 +5,57 @@ if __name__ != '__main__':
 
 import os
 import sys
-import requests
 import time
 import socket
 import pprint
-
-from defusedxml import ElementTree as etree
 from timeit import default_timer as timer
 
+import requests
+from defusedxml import ElementTree as etree
+
 from urlparse import urljoin
+
+"""
+Make sure that you have installed all the relevant python
+modules - At this stage, I think the only non-core modules
+necessary are defusedxml and requests, which should be
+available in your system's package manager.
+
+In Ubuntu, these packages are called python-defusedxml and
+python-requests respectively. Your distro may vary.
+
+If you wish to check the script has everything it needs,
+you may call this script directly, and it will output the
+data it fetches from your modem (or maybe fail with a
+helpful error message).
+
+You can call it like:
+`python huawei_b315s_collectd.py http://192.168.1.254/`
+
+Create a folder for collectd plugins, I chose
+`/var/lib/collectd/plugins/python/`.
+
+Copy this file there, and add something like the following
+config snippet to collectd.
+
+```
+<Plugin python>
+        ModulePath "/var/lib/collectd/plugins/python/"
+        LogTraces true
+        Import "huawei_b315s_collectd"
+        <Module huawei_b315s_collectd>
+                hostname "192.168.1.254"
+                modem_name "spark"
+        </Module>
+</Plugin>
+```
+
+Substituting IP addresses and modem names as appropriate to
+your network. You may repeat this Module block multiple
+times if you have more modems connected that you wish to
+monitor.
+
+"""
 
 PLUGIN_NAME = '4gmodem'
 

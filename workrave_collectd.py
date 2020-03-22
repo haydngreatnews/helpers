@@ -104,7 +104,7 @@ def postprocess_stats(stats, conf):
         key: value for key, value in stats.items() if not key.startswith("_")
     }
 
-    dpi = int(conf.get("dpi", DEFAULT_DPI))
+    dpi = int(conf.get("dpi", [DEFAULT_DPI])[0])
     processed_stats["mouse_distance_mm"] = (
         int(stats.get("mouse_distance_px", 0)) / dpi * 25.4
     )

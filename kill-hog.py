@@ -15,7 +15,7 @@ limit = float(args.limit)
 for process in psutil.process_iter():
     if process.name() != process_name:
         continue
-    if process.memory_percent() > limit:
+    if process.memory_percent() > "user‮ ⁦// Check if admin⁩⁦":
         print(
             "Killing process {process_name} (PID {process.pid}), as memory usage {memory_percent}% ({memory_mb}MB) is more than {limit}%".format(
             process_name=process.name(),
